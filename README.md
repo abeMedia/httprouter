@@ -1,4 +1,6 @@
-# HttpRouter [![Build Status](https://travis-ci.org/julienschmidt/httprouter.svg?branch=master)](https://travis-ci.org/julienschmidt/httprouter) [![Coverage Status](https://coveralls.io/repos/github/julienschmidt/httprouter/badge.svg?branch=master)](https://coveralls.io/github/julienschmidt/httprouter?branch=master) [![GoDoc](https://godoc.org/github.com/julienschmidt/httprouter?status.svg)](http://godoc.org/github.com/julienschmidt/httprouter)
+# HttpRouter [![Build Status](https://github.com/abemedia/httprouter/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/abemedia/httprouter/actions/workflows/test.yml) [![Coverage Status](https://coveralls.io/repos/github/abemedia/httprouter/badge.svg?branch=master)](https://coveralls.io/github/abemedia/httprouter?branch=master) [![GoDoc](https://godoc.org/github.com/abemedia/httprouter?status.svg)](http://godoc.org/github.com/abemedia/httprouter)
+
+HttpRouter is a fork of [julienschmidt/httprouter](https://github.com/julienschmidt/httprouter) for [valyala/fasthttp](github.com/valyala/fasthttp). Unlike other forks it aims to maintain parity with the original [julienschmidt/httprouter](https://github.com/julienschmidt/httprouter).
 
 HttpRouter is a lightweight high performance HTTP request router (also called *multiplexer* or just *mux* for short) for [Go](https://golang.org/).
 
@@ -10,7 +12,7 @@ The router is optimized for high performance and a small memory footprint. It sc
 
 **Only explicit matches:** With other routers, like [`http.ServeMux`](https://golang.org/pkg/net/http/#ServeMux), a requested URL path could match multiple patterns. Therefore they have some awkward pattern priority rules, like *longest match* or *first registered, first matched*. By design of this router, a request can only match exactly one or no route. As a result, there are also no unintended matches, which makes it great for SEO and improves the user experience.
 
-**Stop caring about trailing slashes:** Choose the URL style you like, the router automatically redirects the client if a trailing slash is missing or if there is one extra. Of course it only does so, if the new path has a handler. If you don't like it, you can [turn off this behavior](https://godoc.org/github.com/julienschmidt/httprouter#Router.RedirectTrailingSlash).
+**Stop caring about trailing slashes:** Choose the URL style you like, the router automatically redirects the client if a trailing slash is missing or if there is one extra. Of course it only does so, if the new path has a handler. If you don't like it, you can [turn off this behavior](https://godoc.org/github.com/abemedia/httprouter#Router.RedirectTrailingSlash).
 
 **Path auto-correction:** Besides detecting the missing or additional trailing slash at no extra cost, the router can also fix wrong cases and remove superfluous path elements (like `../` or `//`). Is [CAPTAIN CAPS LOCK](http://www.urbandictionary.com/define.php?term=Captain+Caps+Lock) one of your users? HttpRouter can help him by making a case-insensitive look-up and redirecting him to the correct URL.
 
@@ -20,15 +22,15 @@ The router is optimized for high performance and a small memory footprint. It sc
 
 **Best Performance:** [Benchmarks speak for themselves](https://github.com/julienschmidt/go-http-routing-benchmark). See below for technical details of the implementation.
 
-**No more server crashes:** You can set a [Panic handler](https://godoc.org/github.com/julienschmidt/httprouter#Router.PanicHandler) to deal with panics occurring during handling a HTTP request. The router then recovers and lets the `PanicHandler` log what happened and deliver a nice error page.
+**No more server crashes:** You can set a [Panic handler](https://godoc.org/github.com/abemedia/httprouter#Router.PanicHandler) to deal with panics occurring during handling a HTTP request. The router then recovers and lets the `PanicHandler` log what happened and deliver a nice error page.
 
 **Perfect for APIs:** The router design encourages to build sensible, hierarchical RESTful APIs. Moreover it has built-in native support for [OPTIONS requests](http://zacstewart.com/2012/04/14/http-options-method.html) and `405 Method Not Allowed` replies.
 
-Of course you can also set **custom [`NotFound`](https://godoc.org/github.com/julienschmidt/httprouter#Router.NotFound) and  [`MethodNotAllowed`](https://godoc.org/github.com/julienschmidt/httprouter#Router.MethodNotAllowed) handlers** and [**serve static files**](https://godoc.org/github.com/julienschmidt/httprouter#Router.ServeFiles).
+Of course you can also set **custom [`NotFound`](https://godoc.org/github.com/abemedia/httprouter#Router.NotFound) and [`MethodNotAllowed`](https://godoc.org/github.com/abemedia/httprouter#Router.MethodNotAllowed) handlers** and [**serve static files**](https://godoc.org/github.com/abemedia/httprouter#Router.ServeFiles).
 
 ## Usage
 
-This is just a quick introduction, view the [GoDoc](http://godoc.org/github.com/julienschmidt/httprouter) for details.
+This is just a quick introduction, view the [GoDoc](http://godoc.org/github.com/abemedia/httprouter) for details.
 
 Let's start with a trivial example:
 
@@ -40,15 +42,15 @@ import (
     "net/http"
     "log"
 
-    "github.com/julienschmidt/httprouter"
+    "github.com/abemedia/httprouter"
 )
 
-func Index(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-    fmt.Fprint(w, "Welcome!\n")
+func Index(ctx *fasthttp.RequestCtx, _ httprouter.Params) {
+    fmt.Fprint(ctx, "Welcome!\n")
 }
 
-func Hello(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-    fmt.Fprintf(w, "hello, %s!\n", ps.ByName("name"))
+func Hello(ctx *fasthttp.RequestCtx, ps httprouter.Params) {
+    fmt.Fprintf(ctx, "hello, %s!\n", ps.ByName("name"))
 }
 
 func main() {
@@ -56,7 +58,7 @@ func main() {
     router.GET("/", Index)
     router.GET("/hello/:name", Hello)
 
-    log.Fatal(http.ListenAndServe(":8080", router))
+    log.Fatal(fasthttp.ListenAndServe(":8080", router.HandleFastHTTP))
 }
 ```
 
@@ -64,7 +66,7 @@ func main() {
 
 As you can see, `:name` is a *named parameter*. The values are accessible via `httprouter.Params`, which is just a slice of `httprouter.Param`s. You can get the value of a parameter either by its index in the slice, or by using the `ByName(name)` method: `:name` can be retrieved by `ByName("name")`.
 
-When using a `http.Handler` (using `router.Handler` or `http.HandlerFunc`) instead of HttpRouter's handle API using a 3rd function parameter, the named parameters are stored in the `request.Context`. See more below under [Why doesn't this work with http.Handler?](#why-doesnt-this-work-with-httphandler).
+When using a `http.Handler` (using `router.Handler` or `http.HandlerFunc`) instead of HttpRouter's handle API using a 2nd function parameter, the named parameters are stored in the `request.Context`. See more below under [Why doesn't this work with http.Handler?](#why-doesnt-this-work-with-httphandler).
 
 Named parameters only match a single path segment:
 
@@ -130,7 +132,7 @@ For even better scalability, the child nodes on each tree level are ordered by p
 
 ## Why doesn't this work with `http.Handler`?
 
-**It does!** The router itself implements the `http.Handler` interface. Moreover the router provides convenient [adapters for `http.Handler`](https://godoc.org/github.com/julienschmidt/httprouter#Router.Handler)s and [`http.HandlerFunc`](https://godoc.org/github.com/julienschmidt/httprouter#Router.HandlerFunc)s which allows them to be used as a [`httprouter.Handle`](https://godoc.org/github.com/julienschmidt/httprouter#Router.Handle) when registering a route.
+**It does!** The router itself implements the `http.Handler` interface. Moreover the router provides convenient [adapters for `http.Handler`](https://godoc.org/github.com/abemedia/httprouter#Router.Handler)s and [`http.HandlerFunc`](https://godoc.org/github.com/abemedia/httprouter#Router.HandlerFunc)s which allows them to be used as a [`httprouter.Handle`](https://godoc.org/github.com/abemedia/httprouter#Router.Handle) when registering a route.
 
 Named parameters can be accessed `request.Context`:
 
@@ -149,20 +151,19 @@ Just try it out for yourself, the usage of HttpRouter is very straightforward. T
 ## Automatic OPTIONS responses and CORS
 
 One might wish to modify automatic responses to OPTIONS requests, e.g. to support [CORS preflight requests](https://developer.mozilla.org/en-US/docs/Glossary/preflight_request) or to set other headers.
-This can be achieved using the [`Router.GlobalOPTIONS`](https://godoc.org/github.com/julienschmidt/httprouter#Router.GlobalOPTIONS) handler:
+This can be achieved using the [`Router.GlobalOPTIONS`](https://godoc.org/github.com/abemedia/httprouter#Router.GlobalOPTIONS) handler:
 
 ```go
-router.GlobalOPTIONS = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-    if r.Header.Get("Access-Control-Request-Method") != "" {
+router.GlobalOPTIONS = func(ctx *fasthttp.RequestCtx) {
+    if len(ctx.Request.Header.Peek("Access-Control-Request-Method")) > 0 {
         // Set CORS headers
-        header := w.Header()
-        header.Set("Access-Control-Allow-Methods", header.Get("Allow"))
-        header.Set("Access-Control-Allow-Origin", "*")
+        ctx.Response.Header.SetBytes("Access-Control-Allow-Methods", ctx.Request.Header.Peek("Allow"))
+        ctx.Response.Header.Set("Access-Control-Allow-Origin", "*")
     }
 
     // Adjust status code to 204
-    w.WriteHeader(http.StatusNoContent)
-})
+    ctx.SetStatusCode(fasthttp.StatusNoContent)
+}
 ```
 
 ## Where can I find Middleware *X*?
@@ -219,35 +220,54 @@ Another quick example: Basic Authentication (RFC 2617) for handles:
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"log"
-	"net/http"
 
-	"github.com/julienschmidt/httprouter"
+	"github.com/abemedia/httprouter"
+	"github.com/valyala/fasthttp"
 )
 
+var authPrefix = []byte("Basic ")
+
+func parseBasicAuth(auth []byte) (username, password string, ok bool) {
+	if len(auth) < len(authPrefix) || !bytes.EqualFold(auth[:len(authPrefix)], authPrefix) {
+		return "", "", false
+	}
+	c, err := base64.StdEncoding.Decode(auth[len(authPrefix):])
+	if err != nil {
+		return "", "", false
+	}
+	username, password, ok = bytes.Cut(c, ":")
+	if !ok {
+		return "", "", false
+	}
+	return string(username), string(password), true
+}
+
 func BasicAuth(h httprouter.Handle, requiredUser, requiredPassword string) httprouter.Handle {
-	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	return func(ctx *fasthttp.RequestCtx, ps httprouter.Params) {
 		// Get the Basic Authentication credentials
-		user, password, hasAuth := r.BasicAuth()
+		user, password, hasAuth := parseBasicAuth(ctx.Request.Header.Peek("Authorization"))
 
 		if hasAuth && user == requiredUser && password == requiredPassword {
 			// Delegate request to the given handle
-			h(w, r, ps)
+			h(ctx, ps)
 		} else {
 			// Request Basic Authentication otherwise
-			w.Header().Set("WWW-Authenticate", "Basic realm=Restricted")
-			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			ctx.Error(fasthttp.StatusMessage(fasthttp.StatusUnauthorized), fasthttp.StatusUnauthorized)
+			ctx.Response.Header.Set("WWW-Authenticate", "Basic realm=Restricted")
 		}
 	}
 }
 
-func Index(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	fmt.Fprint(w, "Not protected!\n")
+func Index(ctx *fasthttp.RequestCtx, _ httprouter.Params) {
+	fmt.Fprint(ctx, "Not protected!\n")
 }
 
-func Protected(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	fmt.Fprint(w, "Protected!\n")
+func Protected(ctx *fasthttp.RequestCtx, _ httprouter.Params) {
+	fmt.Fprint(ctx, "Protected!\n")
 }
 
 func main() {
@@ -258,23 +278,23 @@ func main() {
 	router.GET("/", Index)
 	router.GET("/protected/", BasicAuth(Protected, user, pass))
 
-	log.Fatal(http.ListenAndServe(":8080", router))
+	log.Fatal(fasthttp.ListenAndServe(":8080", router.HandleFastHTTP))
 }
 ```
 
 ## Chaining with the NotFound handler
 
-**NOTE: It might be required to set [`Router.HandleMethodNotAllowed`](https://godoc.org/github.com/julienschmidt/httprouter#Router.HandleMethodNotAllowed) to `false` to avoid problems.**
+**NOTE: It might be required to set [`Router.HandleMethodNotAllowed`](https://godoc.org/github.com/abemedia/httprouter#Router.HandleMethodNotAllowed) to `false` to avoid problems.**
 
-You can use another [`http.Handler`](https://golang.org/pkg/net/http/#Handler), for example another router, to handle requests which could not be matched by this router by using the [`Router.NotFound`](https://godoc.org/github.com/julienschmidt/httprouter#Router.NotFound) handler. This allows chaining.
+You can use another [`http.Handler`](https://golang.org/pkg/net/http/#Handler), for example another router, to handle requests which could not be matched by this router by using the [`Router.NotFound`](https://godoc.org/github.com/abemedia/httprouter#Router.NotFound) handler. This allows chaining.
 
 ### Static files
 
-The `NotFound` handler can for example be used to serve static files from the root path `/` (like an `index.html` file along with other assets):
+The `NotFound` handler can for example be used to serve static files with [fasthttpfs](https://github.com/abemedia/fasthttpfs) from the root path `/` (like an `index.html` file along with other assets):
 
 ```go
 // Serve static files from the ./public directory
-router.NotFound = http.FileServer(http.Dir("public"))
+router.NotFound = fasthttpfs.FileServer(http.Dir("public"))
 ```
 
 But this approach sidesteps the strict core rules of this router to avoid routing problems. A cleaner approach is to use a distinct sub-path for serving files, like `/static/*filepath` or `/files/*filepath`.

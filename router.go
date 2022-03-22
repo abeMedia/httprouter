@@ -10,17 +10,17 @@
 //
 //  import (
 //      "fmt"
-//      "github.com/julienschmidt/httprouter"
+//      "github.com/abemedia/httprouter"
 //      "net/http"
 //      "log"
 //  )
 //
-//  func Index(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-//      fmt.Fprint(w, "Welcome!\n")
+//  func Index(ctx *fasthttp.RequestCtx, _ httprouter.Params) {
+//      fmt.Fprint(ctx, "Welcome!\n")
 //  }
 //
-//  func Hello(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-//      fmt.Fprintf(w, "hello, %s!\n", ps.ByName("name"))
+//  func Hello(ctx *fasthttp.RequestCtx, ps httprouter.Params) {
+//      fmt.Fprintf(ctx, "hello, %s!\n", ps.ByName("name"))
 //  }
 //
 //  func main() {
@@ -28,7 +28,7 @@
 //      router.GET("/", Index)
 //      router.GET("/hello/:name", Hello)
 //
-//      log.Fatal(http.ListenAndServe(":8080", router))
+//      log.Fatal(fasthttp.ListenAndServe(":8080", router.HandleFastHTTP))
 //  }
 //
 // The router matches incoming requests by the request method and the path.
@@ -81,12 +81,17 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"unsafe"
+
+	"github.com/abemedia/fasthttpfs"
+	"github.com/valyala/fasthttp"
+	"github.com/valyala/fasthttp/fasthttpadaptor"
 )
 
 // Handle is a function that can be registered to a route to handle HTTP
-// requests. Like http.HandlerFunc, but has a third parameter for the values of
+// requests. Like fasthttp.RequestHandler, but has a second parameter for the values of
 // wildcards (path variables).
-type Handle func(http.ResponseWriter, *http.Request, Params)
+type Handle func(*fasthttp.RequestCtx, Params)
 
 // Param is a single URL parameter, consisting of a key and a value.
 type Param struct {
@@ -110,10 +115,8 @@ func (ps Params) ByName(name string) string {
 	return ""
 }
 
-type paramsKey struct{}
-
 // ParamsKey is the request context key under which URL params are stored.
-var ParamsKey = paramsKey{}
+var ParamsKey = "$__params"
 
 // ParamsFromContext pulls the URL parameters from a request context,
 // or returns nil if none are present.
@@ -133,7 +136,7 @@ func (ps Params) MatchedRoutePath() string {
 	return ps.ByName(MatchedRoutePathParam)
 }
 
-// Router is a http.Handler which can be used to dispatch requests to different
+// Router is a fasthttp.RequestHandler which can be used to dispatch requests to different
 // handler functions via configurable routes
 type Router struct {
 	trees map[string]*node
@@ -177,36 +180,36 @@ type Router struct {
 	// Custom OPTIONS handlers take priority over automatic replies.
 	HandleOPTIONS bool
 
-	// An optional http.Handler that is called on automatic OPTIONS requests.
+	// An optional fasthttp.RequestHandler that is called on automatic OPTIONS requests.
 	// The handler is only called if HandleOPTIONS is true and no OPTIONS
 	// handler for the specific path was set.
 	// The "Allowed" header is set before calling the handler.
-	GlobalOPTIONS http.Handler
+	GlobalOPTIONS fasthttp.RequestHandler
 
 	// Cached value of global (*) allowed methods
 	globalAllowed string
 
-	// Configurable http.Handler which is called when no matching route is
+	// Configurable fasthttp.RequestHandler which is called when no matching route is
 	// found. If it is not set, http.NotFound is used.
-	NotFound http.Handler
+	NotFound fasthttp.RequestHandler
 
-	// Configurable http.Handler which is called when a request
+	// Configurable fasthttp.RequestHandler which is called when a request
 	// cannot be routed and HandleMethodNotAllowed is true.
 	// If it is not set, http.Error with http.StatusMethodNotAllowed is used.
 	// The "Allow" header with allowed request methods is set before the handler
 	// is called.
-	MethodNotAllowed http.Handler
+	MethodNotAllowed fasthttp.RequestHandler
 
 	// Function to handle panics recovered from http handlers.
 	// It should be used to generate a error page and return the http error code
 	// 500 (Internal Server Error).
 	// The handler can be used to keep your server from crashing because of
 	// unrecovered panics.
-	PanicHandler func(http.ResponseWriter, *http.Request, interface{})
+	PanicHandler func(*fasthttp.RequestCtx, interface{})
 }
 
-// Make sure the Router conforms with the http.Handler interface
-var _ http.Handler = New()
+// Make sure the Router conforms with the fasthttp.RequestHandler interface
+var _ fasthttp.RequestHandler = New().HandleFastHTTP
 
 // New returns a new initialized Router.
 // Path auto-correction, including trailing slashes, is enabled by default.
@@ -232,16 +235,16 @@ func (r *Router) putParams(ps *Params) {
 }
 
 func (r *Router) saveMatchedRoutePath(path string, handle Handle) Handle {
-	return func(w http.ResponseWriter, req *http.Request, ps Params) {
+	return func(ctx *fasthttp.RequestCtx, ps Params) {
 		if ps == nil {
 			psp := r.getParams()
 			ps = (*psp)[0:1]
 			ps[0] = Param{Key: MatchedRoutePathParam, Value: path}
-			handle(w, req, ps)
+			handle(ctx, ps)
 			r.putParams(psp)
 		} else {
 			ps = append(ps, Param{Key: MatchedRoutePathParam, Value: path})
-			handle(w, req, ps)
+			handle(ctx, ps)
 		}
 	}
 }
@@ -339,14 +342,13 @@ func (r *Router) Handle(method, path string, handle Handle) {
 // request handle.
 // The Params are available in the request context under ParamsKey.
 func (r *Router) Handler(method, path string, handler http.Handler) {
+	h := fasthttpadaptor.NewFastHTTPHandler(handler)
 	r.Handle(method, path,
-		func(w http.ResponseWriter, req *http.Request, p Params) {
+		func(ctx *fasthttp.RequestCtx, p Params) {
 			if len(p) > 0 {
-				ctx := req.Context()
-				ctx = context.WithValue(ctx, ParamsKey, p)
-				req = req.WithContext(ctx)
+				ctx.SetUserValue(ParamsKey, p)
 			}
-			handler.ServeHTTP(w, req)
+			h(ctx)
 		},
 	)
 }
@@ -372,17 +374,17 @@ func (r *Router) ServeFiles(path string, root http.FileSystem) {
 		panic("path must end with /*filepath in path '" + path + "'")
 	}
 
-	fileServer := http.FileServer(root)
+	fileServer := fasthttpfs.FileServer(root)
 
-	r.GET(path, func(w http.ResponseWriter, req *http.Request, ps Params) {
-		req.URL.Path = ps.ByName("filepath")
-		fileServer.ServeHTTP(w, req)
+	r.GET(path, func(ctx *fasthttp.RequestCtx, ps Params) {
+		ctx.Request.URI().SetPath(ps.ByName("filepath"))
+		fileServer(ctx)
 	})
 }
 
-func (r *Router) recv(w http.ResponseWriter, req *http.Request) {
+func (r *Router) recv(ctx *fasthttp.RequestCtx) {
 	if rcv := recover(); rcv != nil {
-		r.PanicHandler(w, req, rcv)
+		r.PanicHandler(ctx, rcv)
 	}
 }
 
@@ -409,7 +411,7 @@ func (r *Router) Lookup(method, path string) (Handle, Params, bool) {
 func (r *Router) allowed(path, reqMethod string) (allow string) {
 	allowed := make([]string, 0, 9)
 
-	if path == "*" { // server-wide
+	if path == "*" || path == "/*" { // server-wide
 		// empty method is used for internal calls to refresh the cache
 		if reqMethod == "" {
 			for method := range r.trees {
@@ -457,38 +459,38 @@ func (r *Router) allowed(path, reqMethod string) (allow string) {
 	return allow
 }
 
-// ServeHTTP makes the router implement the http.Handler interface.
-func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+// HandleFastHTTP makes the router implement the fasthttp.ListenAndServe interface.
+func (r *Router) HandleFastHTTP(ctx *fasthttp.RequestCtx) {
 	if r.PanicHandler != nil {
-		defer r.recv(w, req)
+		defer r.recv(ctx)
 	}
 
-	path := req.URL.Path
+	path := b2s(ctx.URI().PathOriginal())
 
-	if root := r.trees[req.Method]; root != nil {
+	if root := r.trees[b2s(ctx.Method())]; root != nil {
 		if handle, ps, tsr := root.getValue(path, r.getParams); handle != nil {
 			if ps != nil {
-				handle(w, req, *ps)
+				handle(ctx, *ps)
 				r.putParams(ps)
 			} else {
-				handle(w, req, nil)
+				handle(ctx, nil)
 			}
 			return
-		} else if req.Method != http.MethodConnect && path != "/" {
+		} else if !ctx.IsConnect() && path != "/" {
 			// Moved Permanently, request with GET method
 			code := http.StatusMovedPermanently
-			if req.Method != http.MethodGet {
+			if !ctx.IsGet() {
 				// Permanent Redirect, request with same method
 				code = http.StatusPermanentRedirect
 			}
 
 			if tsr && r.RedirectTrailingSlash {
 				if len(path) > 1 && path[len(path)-1] == '/' {
-					req.URL.Path = path[:len(path)-1]
+					ctx.URI().SetPath(path[:len(path)-1])
 				} else {
-					req.URL.Path = path + "/"
+					ctx.URI().SetPath(path + "/")
 				}
-				http.Redirect(w, req, req.URL.String(), code)
+				ctx.RedirectBytes(ctx.URI().FullURI(), code)
 				return
 			}
 
@@ -499,33 +501,33 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 					r.RedirectTrailingSlash,
 				)
 				if found {
-					req.URL.Path = fixedPath
-					http.Redirect(w, req, req.URL.String(), code)
+					ctx.URI().SetPath(fixedPath)
+					ctx.RedirectBytes(ctx.URI().FullURI(), code)
 					return
 				}
 			}
 		}
 	}
 
-	if req.Method == http.MethodOptions && r.HandleOPTIONS {
+	if ctx.IsOptions() && r.HandleOPTIONS {
 		// Handle OPTIONS requests
 		if allow := r.allowed(path, http.MethodOptions); allow != "" {
-			w.Header().Set("Allow", allow)
+			ctx.Response.Header.Set("Allow", allow)
 			if r.GlobalOPTIONS != nil {
-				r.GlobalOPTIONS.ServeHTTP(w, req)
+				r.GlobalOPTIONS(ctx)
 			}
 			return
 		}
 	} else if r.HandleMethodNotAllowed { // Handle 405
-		if allow := r.allowed(path, req.Method); allow != "" {
-			w.Header().Set("Allow", allow)
+		if allow := r.allowed(path, b2s(ctx.Method())); allow != "" {
+			ctx.Response.Header.Set("Allow", allow)
 			if r.MethodNotAllowed != nil {
-				r.MethodNotAllowed.ServeHTTP(w, req)
+				r.MethodNotAllowed(ctx)
 			} else {
-				http.Error(w,
-					http.StatusText(http.StatusMethodNotAllowed),
-					http.StatusMethodNotAllowed,
-				)
+				ctx.SetContentType("text/plain; charset=utf-8")
+				ctx.Response.Header.Set("X-Content-Type-Options", "nosniff")
+				ctx.SetStatusCode(http.StatusMethodNotAllowed)
+				ctx.WriteString(http.StatusText(http.StatusMethodNotAllowed))
 			}
 			return
 		}
@@ -533,8 +535,12 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	// Handle 404
 	if r.NotFound != nil {
-		r.NotFound.ServeHTTP(w, req)
+		r.NotFound(ctx)
 	} else {
-		http.NotFound(w, req)
+		ctx.NotFound()
 	}
+}
+
+func b2s(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
 }
