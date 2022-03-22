@@ -1,0 +1,42 @@
+name: Test
+
+on:
+  push:
+    paths:
+      - '**.go'
+      - go.mod
+      - go.sum
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go:
+          - '1.18'
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go }}
+
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-
+
+      - run: |
+          go test -v -covermode=count -coverprofile=coverage.out
+          go vet ./...
+          test -z "$(gofmt -d -s . | tee /dev/stderr)"
+
+      - if: github.ref == 'refs/heads/master'
+        env:
+          COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          go install github.com/mattn/goveralls@latest
+          goveralls -coverprofile=coverage.out -service=github
